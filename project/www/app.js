@@ -22,7 +22,7 @@ const FEEDBACK_ICONS = { OK: '✓', INFO: 'ℹ', WARNING: '⚠', ALERT: '✕' };
 // =========================================================================
 // SESSION STATE
 // =========================================================================
-let lastDataTs       = 0;      // last data.timestamp we saw — used to detect new steps
+let lastStepCount    = -1;     // last stepCount we processed — triggers feedback on increase
 let prevCadence      = null;
 let prevImpact       = null;
 let prevAngle        = null;
@@ -342,7 +342,7 @@ function drawGauge(_svgId, arcsId, needleId, valTextId,
   function arcPath(aDeg, bDeg) {
     const [sx, sy] = polar(aDeg, R), [ex, ey] = polar(bDeg, R);
     const large = Math.abs(aDeg - bDeg) >= 180 ? 1 : 0;
-    return `M ${sx.toFixed(2)} ${sy.toFixed(2)} A ${R} ${R} 0 ${large} 0 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
+    return `M ${sx.toFixed(2)} ${sy.toFixed(2)} A ${R} ${R} 0 ${large} 1 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
   }
 
   if (!arcsG.dataset.ready) {
@@ -381,6 +381,8 @@ const IMPACT_ZONES = [
 ];
 
 function initGauges() {
+  document.getElementById('pronation-arcs').removeAttribute('data-ready');
+  document.getElementById('impact-arcs').removeAttribute('data-ready');
   drawGauge('pronation-gauge','pronation-arcs','pronation-needle','pronation-val', PRONATION_ZONES,-30,30,0,'°');
   drawGauge('impact-gauge','impact-arcs','impact-needle','impact-val', IMPACT_ZONES,-20,25,0,'°');
   gaugesReady = true;
@@ -686,9 +688,10 @@ async function fetchData() {
     updateScores(data.scores, data.stepCount || 0);
 
     // Only process feedback when MATLAB writes a new step (timestamp changes)
-    if (data.timestamp !== lastDataTs) {
-      lastDataTs = data.timestamp;
-      totalSteps = data.stepCount || totalSteps;
+    const currentStep = data.stepCount || 0;
+    if (currentStep > lastStepCount) {
+      lastStepCount = currentStep;
+      totalSteps    = currentStep;
       if (!sessionStartTime) sessionStartTime = new Date();
 
       updateCurrentFeedback(data.feedback);
