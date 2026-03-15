@@ -145,18 +145,23 @@
 
       <!-- Current step feedback -->
       <div class="feedback-section">
-        <h2 class="panel-title">Right Now</h2>
+        <h2 class="panel-title">Feedback</h2>
         <div id="feedbackCurrent" class="feedback-current">
           <div class="feedback-empty">Waiting for data...</div>
         </div>
       </div>
 
-      <!-- Deduplicated session log -->
+      <!-- Session log -->
       <div class="feedback-section feedback-section--log">
-        <h2 class="panel-title">
-          Session Log
-          <span class="log-count" id="logCount"></span>
-        </h2>
+        <div class="log-header">
+          <h2 class="panel-title">
+            Session Log
+            <span class="log-count" id="logCount"></span>
+          </h2>
+          <button class="report-btn" id="reportBtn" onclick="generateReport()">
+            Generate Summary Report
+          </button>
+        </div>
         <ul class="feedback-log" id="feedbackLog">
           <li class="log-empty">No events yet.</li>
         </ul>
@@ -219,6 +224,19 @@
     </section>
 
   </main>
+
+  <!-- ===== REPORT MODAL ===== -->
+  <div class="report-overlay" id="reportModal" role="dialog" aria-modal="true" aria-label="Session Summary Report">
+    <div class="report-modal">
+      <div class="report-modal-header">
+        <h2 class="report-modal-title">Session Summary Report</h2>
+        <button class="report-close-btn" onclick="closeReport()" aria-label="Close report">✕</button>
+      </div>
+      <div class="report-modal-body" id="reportBody">
+        <!-- Populated by generateReport() -->
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

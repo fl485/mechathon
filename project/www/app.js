@@ -1,18 +1,13 @@
 // app.js — RunForm Analyser Dashboard
-// Pure Vanilla JS, no frameworks.
-// Polls data.json every 100 ms and updates all UI elements.
-
 'use strict';
 
 // =========================================================================
 // CONSTANTS
 // =========================================================================
-const POLL_INTERVAL    = 100;   // ms between JSON polls
-const STALE_THRESHOLD  = 2000;  // ms — data older than this = disconnected
-const MAX_FEEDBACK     = 5;     // maximum feedback items shown at once
-const STEP_SCORE_THRESH = 10;   // show score panel after this many steps
+const POLL_INTERVAL     = 100;   // ms
+const STALE_THRESHOLD   = 2000;  // ms
+const STEP_SCORE_THRESH = 10;    // show score panel after N steps
 
-// Colour tokens (match CSS variables)
 const CLR = {
   good:    '#22C55E',
   warning: '#F59E0B',
@@ -22,25 +17,148 @@ const CLR = {
   border:  '#E5E7EB',
 };
 
+const FEEDBACK_ICONS = { OK: '✓', INFO: 'ℹ', WARNING: '⚠', ALERT: '✕' };
+
 // =========================================================================
-// STATE
+// SESSION STATE
 // =========================================================================
-let lastTimestamp     = 0;
-let prevCadence       = null;
-let prevImpact        = null;
-let prevAngle         = null;
-let feedbackQueue     = [];   // [{level, message}, ...]
-let gaugesInitialised = false;
+let lastDataTs       = 0;      // last data.timestamp we saw — used to detect new steps
+let prevCadence      = null;
+let prevImpact       = null;
+let prevAngle        = null;
+let gaugesReady      = false;
+let sessionStartTime = null;   // Date of first step
+let totalSteps       = 0;
+let lastKnownScores  = null;   // updated every poll
+
+// Unique feedback store.
+// Key: message text.  Value: { level, message, firstSeen: Date, count, lastSeen: Date }
+// Each distinct message is stored exactly once; count increments on repeat.
+const feedbackStore = {};
+
+// =========================================================================
+// ACTIONABLE ADVICE MAP
+// Keyed by message substring. Used by the report generator.
+// =========================================================================
+const ADVICE = {
+  'heel striking': {
+    priority: 1,
+    title: 'Eliminate Heel Strike',
+    drill: 'Short-Step Drill',
+    tips: [
+      'Shorten your stride by ~10% so your foot lands under your hip, not in front.',
+      'Think about "pulling" your foot back towards you rather than reaching forward.',
+      'Introduce the change gradually: apply for 5 minutes per run, extend each week.',
+      'Slightly increasing cadence naturally moves your landing point back.',
+    ],
+  },
+  'cadence is too low': {
+    priority: 1,
+    title: 'Increase Cadence',
+    drill: 'Metronome Run',
+    tips: [
+      'Use a free metronome app set to 170 bpm — take one step per beat.',
+      'Apply for 60-second bursts, then run freely. Repeat 3–4 times per session.',
+      'Target range is 160–180 steps/min. Small jumps of 5 spm per week are safest.',
+    ],
+  },
+  'cadence is slightly slow': {
+    priority: 2,
+    title: 'Nudge Cadence Up',
+    drill: 'Count Steps',
+    tips: [
+      'Count your steps for 30 seconds and aim for 80+ (= 160 spm both feet).',
+      'A slight lean forward from the ankles often naturally increases turnover.',
+    ],
+  },
+  'rolling inward': {
+    priority: 1,
+    title: 'Reduce Overpronation',
+    drill: 'Single-Leg Ankle Stability',
+    tips: [
+      'Balance on one leg for 30 s with eyes closed — 3 sets each side daily.',
+      'Progress to single-leg calf raises (3 × 15 each side).',
+      'Check shoe wear — consider a stability or motion-control shoe.',
+      'Strengthen your glutes (clamshells, bridges) to improve overall alignment.',
+    ],
+  },
+  'supination': {
+    priority: 2,
+    title: 'Address Supination',
+    drill: 'Hip Strengthening',
+    tips: [
+      'Lateral band walks: 2 × 20 steps each direction daily.',
+      'Consider a neutral, cushioned shoe for better shock absorption.',
+      'Supination is often mild — monitor for ankle instability and adjust if needed.',
+    ],
+  },
+  'crossing your body': {
+    priority: 1,
+    title: 'Fix Crossover Gait',
+    drill: 'Wide-Lane Drill',
+    tips: [
+      'Imagine two parallel train tracks — keep each foot on its own track.',
+      'On a treadmill: place tape 10 cm apart and aim to land outside the lines.',
+      'Think "hip-width" for each landing — not narrow, not wide.',
+      'Reduces knee and IT-band stress significantly over time.',
+    ],
+  },
+  'crossover gait': {
+    priority: 2,
+    title: 'Widen Your Step Landing',
+    drill: 'Hip-Width Cue',
+    tips: [
+      'Consciously land slightly wider — a few centimetres is enough.',
+      'Visualise two parallel lanes and keep feet separated.',
+    ],
+  },
+  'landing very hard': {
+    priority: 1,
+    title: 'Soften Your Landing',
+    drill: 'Quiet Feet Drill',
+    tips: [
+      'Run on a quiet floor and aim for silence — if you can hear yourself, land softer.',
+      'Increase knee bend on contact to absorb impact through your legs, not the ground.',
+      'Shorten stride length if impact remains high.',
+      'This gradually builds calf, Achilles, and tibial resilience.',
+    ],
+  },
+  'cadence is very high': {
+    priority: 3,
+    title: 'Monitor High Cadence',
+    drill: null,
+    tips: [
+      'Very high cadence is only a concern if it feels forced or your form is suffering.',
+      'If comfortable, no action needed — elite runners often exceed 180 spm.',
+    ],
+  },
+  'cadence is slightly high': {
+    priority: 3,
+    title: 'High Cadence Note',
+    drill: null,
+    tips: [
+      'Slightly elevated cadence is generally fine and may even be beneficial.',
+      'Only adjust if you feel fatigued or if form breaks down.',
+    ],
+  },
+};
+
+function getAdvice(message) {
+  const m = (message || '').toLowerCase();
+  for (const [key, val] of Object.entries(ADVICE)) {
+    if (m.includes(key)) return val;
+  }
+  return null;
+}
 
 // =========================================================================
 // CLOCK
 // =========================================================================
 function updateClock() {
-  const now = new Date();
-  const hh  = String(now.getHours()).padStart(2, '0');
-  const mm  = String(now.getMinutes()).padStart(2, '0');
-  const ss  = String(now.getSeconds()).padStart(2, '0');
-  document.getElementById('headerClock').textContent = `${hh}:${mm}:${ss}`;
+  const n = new Date();
+  document.getElementById('headerClock').textContent =
+    [n.getHours(), n.getMinutes(), n.getSeconds()]
+      .map(v => String(v).padStart(2, '0')).join(':');
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -48,206 +166,132 @@ updateClock();
 // =========================================================================
 // CONNECTION STATUS
 // =========================================================================
-function updateConnectionStatus(dataTimestamp) {
+function updateConnectionStatus(ts) {
   const dot   = document.getElementById('connDot');
   const label = document.getElementById('connLabel');
-  const age   = Date.now() - dataTimestamp * 1000;  // dataTimestamp is POSIX seconds
-
-  if (dataTimestamp === 0) {
-    dot.className = 'conn-dot';  // yellow / neutral
-    label.textContent = 'Connecting...';
+  const age   = Date.now() - ts * 1000;
+  if (!ts) {
+    dot.className = 'conn-dot'; label.textContent = 'Connecting...';
   } else if (age < STALE_THRESHOLD) {
-    dot.className = 'conn-dot connected';
-    label.textContent = 'Live';
+    dot.className = 'conn-dot connected'; label.textContent = 'Live';
   } else {
-    dot.className = 'conn-dot disconnected';
-    label.textContent = 'No signal';
+    dot.className = 'conn-dot disconnected'; label.textContent = 'No signal';
   }
 }
 
 // =========================================================================
 // METRIC CARDS
 // =========================================================================
-
-/** Return 'good'|'warning'|'alert' based on value and thresholds */
-function cadenceStatus(spm) {
-  if (spm >= 160 && spm <= 180) return 'good';
-  if ((spm >= 150 && spm < 160) || (spm > 180 && spm <= 190)) return 'warning';
+function cadenceStatus(s) {
+  if (s >= 160 && s <= 180) return 'good';
+  if ((s >= 150 && s < 160) || (s > 180 && s <= 190)) return 'warning';
   return 'alert';
 }
-
-function strikeStatus(strike) {
-  if (strike === 'forefoot') return 'good';
-  if (strike === 'midfoot')  return 'good';
-  if (strike === 'heel')     return 'alert';
-  return 'warning';
+function strikeStatus(s) {
+  return (s === 'forefoot' || s === 'midfoot') ? 'good' : (s === 'heel' ? 'alert' : 'warning');
 }
-
-function impactStatus(g) {
-  if (g < 2.5)  return 'good';
-  if (g <= 3.5) return 'warning';
+function impactStatus(g) { return g < 2.5 ? 'good' : g <= 3.5 ? 'warning' : 'alert'; }
+function angleStatus(d) {
+  if (d >= 0 && d <= 10) return 'good';
+  if ((d >= -5 && d < 0) || (d > 10 && d <= 20)) return 'warning';
   return 'alert';
 }
-
-function angleStatus(deg) {
-  if (deg >= 0 && deg <= 10)                         return 'good';
-  if ((deg >= -5 && deg < 0) || (deg > 10 && deg <= 20)) return 'warning';
-  return 'alert';
-}
-
-/** Trend arrow given current and previous value */
-function trendArrow(current, previous, higherIsBetter) {
-  if (previous === null) return '→';
-  const delta = current - previous;
-  if (Math.abs(delta) < 0.5) return '→';
-  if (delta > 0) return higherIsBetter ? '↑' : '↓';
-  return higherIsBetter ? '↓' : '↑';
+function trendArrow(cur, prev, higherBetter) {
+  if (prev === null || Math.abs(cur - prev) < 0.5) return '→';
+  return (cur > prev) === higherBetter ? '↑' : '↓';
 }
 
 function updateMetricCards(data) {
-  // -- Cadence --
   if (data.cadence && data.cadence > 0) {
-    const val    = Math.round(data.cadence);
-    const status = cadenceStatus(val);
-    const trend  = trendArrow(val, prevCadence, true);
-    prevCadence  = val;
-
-    document.getElementById('val-cadence').textContent   = val;
-    setCardStatus('card-cadence', 'badge-cadence', 'trend-cadence', status, status.toUpperCase(), trend);
+    const v = Math.round(data.cadence), s = cadenceStatus(v);
+    document.getElementById('val-cadence').textContent = v;
+    setCard('card-cadence','badge-cadence','trend-cadence', s, s.toUpperCase(), trendArrow(v, prevCadence, true));
+    prevCadence = v;
   }
-
-  // -- Foot strike --
   if (data.footStrike) {
-    const label  = data.footStrike.charAt(0).toUpperCase() + data.footStrike.slice(1);
-    const status = strikeStatus(data.footStrike);
-    document.getElementById('val-strike').textContent   = label;
-    setCardStatus('card-strike', 'badge-strike', 'trend-strike', status, status.toUpperCase(), '→');
+    const label = data.footStrike.charAt(0).toUpperCase() + data.footStrike.slice(1);
+    const s = strikeStatus(data.footStrike);
+    document.getElementById('val-strike').textContent = label;
+    setCard('card-strike','badge-strike','trend-strike', s, s.toUpperCase(), '→');
   }
+  const impV = +Math.abs(data.az || 0).toFixed(2);
+  const impS = impactStatus(impV);
+  document.getElementById('val-impact').textContent = impV.toFixed(2);
+  setCard('card-impact','badge-impact','trend-impact', impS, impS.toUpperCase(), trendArrow(impV, prevImpact, false));
+  prevImpact = impV;
 
-  // -- Impact force (use peak az as proxy; clamp to reasonable display) --
-  const rawImpact = Math.abs(data.az || 0);
-  const impactVal = +rawImpact.toFixed(2);
-  const impactSt  = impactStatus(impactVal);
-  const impTrend  = trendArrow(impactVal, prevImpact, false);
-  prevImpact = impactVal;
-  document.getElementById('val-impact').textContent = impactVal.toFixed(2);
-  setCardStatus('card-impact', 'badge-impact', 'trend-impact', impactSt, impactSt.toUpperCase(), impTrend);
-
-  // -- Foot angle --
   if (data.impactAngle !== undefined) {
-    const ang    = +data.impactAngle.toFixed(1);
-    const angSt  = angleStatus(ang);
-    const angTr  = trendArrow(ang, prevAngle, false);
-    prevAngle    = ang;
+    const ang = +data.impactAngle.toFixed(1), angS = angleStatus(ang);
     document.getElementById('val-angle').textContent = ang;
-    setCardStatus('card-angle', 'badge-angle', 'trend-angle', angSt, angSt.toUpperCase(), angTr);
+    setCard('card-angle','badge-angle','trend-angle', angS, angS.toUpperCase(), trendArrow(ang, prevAngle, false));
+    prevAngle = ang;
   }
 }
 
-function setCardStatus(cardId, badgeId, trendId, status, badgeText, trendChar) {
-  const card  = document.getElementById(cardId);
-  const badge = document.getElementById(badgeId);
-  const trend = document.getElementById(trendId);
-
-  card.className = `metric-card ${status}`;
-  badge.className = `status-badge ${status}`;
-  badge.textContent = badgeText;
-
-  trend.textContent = trendChar;
-  trend.className = 'trend-arrow' +
-    (trendChar === '↑' ? ' up' : trendChar === '↓' ? ' down' : '');
+function setCard(cardId, badgeId, trendId, status, badgeText, trendChar) {
+  document.getElementById(cardId).className = `metric-card ${status}`;
+  const b = document.getElementById(badgeId);
+  b.className = `status-badge ${status}`; b.textContent = badgeText;
+  const t = document.getElementById(trendId);
+  t.textContent = trendChar;
+  t.className = 'trend-arrow' + (trendChar === '↑' ? ' up' : trendChar === '↓' ? ' down' : '');
 }
 
 // =========================================================================
 // FOOT PATH CANVAS
 // =========================================================================
-const footpathCanvas  = document.getElementById('footpath');
-const footpathCtx     = footpathCanvas.getContext('2d');
-let   animDotX = null, animDotY = null;
-let   animFrame = null;
+const footpathCanvas = document.getElementById('footpath');
+const footpathCtx    = footpathCanvas.getContext('2d');
+let animDotX = null, animDotY = null;
 
 function updateFootPath(footPath, optimalPath) {
-  if (!footPath || !footPath.x || !footPath.y || footPath.x.length < 2) return;
+  if (!footPath || !footPath.x || footPath.x.length < 2) return;
+  const W = footpathCanvas.width, H = footpathCanvas.height, PAD = 24;
+  const allX = [...footPath.x, ...(optimalPath ? optimalPath.x : [])];
+  const allY = [...footPath.y, ...(optimalPath ? optimalPath.y : [])];
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
+  const rangeX = maxX - minX || 0.001, rangeY = maxY - minY || 0.001;
 
-  const W  = footpathCanvas.width;
-  const H  = footpathCanvas.height;
-  const PAD = 24;
-
-  const allX  = [...footPath.x, ...(optimalPath ? optimalPath.x : [])];
-  const allY  = [...footPath.y, ...(optimalPath ? optimalPath.y : [])];
-
-  const minX = Math.min(...allX),  maxX = Math.max(...allX);
-  const minY = Math.min(...allY),  maxY = Math.max(...allY);
-
-  const rangeX = maxX - minX || 0.001;
-  const rangeY = maxY - minY || 0.001;
-
-  /** Map physical metres to canvas pixels.
-   *  Y is flipped: running direction = upward on screen. */
   function toCanvas(x, y) {
-    const cx = PAD + ((x - minX) / rangeX) * (W - 2 * PAD);
-    const cy = H - PAD - ((y - minY) / rangeY) * (H - 2 * PAD);
-    return [cx, cy];
+    return [PAD + ((x-minX)/rangeX)*(W-2*PAD), H-PAD-((y-minY)/rangeY)*(H-2*PAD)];
   }
 
-  footpathCtx.clearRect(0, 0, W, H);
+  footpathCtx.clearRect(0,0,W,H);
+  footpathCtx.fillStyle = '#F0F4FF'; footpathCtx.fillRect(0,0,W,H);
 
-  // Background
-  footpathCtx.fillStyle = '#F0F4FF';
-  footpathCtx.fillRect(0, 0, W, H);
-
-  // Tolerance corridor: ±2 cm around the optimal path
   if (optimalPath && optimalPath.x.length >= 2) {
     footpathCtx.beginPath();
-    const corridorPx = ((0.02 / rangeX) * (W - 2 * PAD));
-
-    // Left edge
-    for (let i = 0; i < optimalPath.x.length; i++) {
-      const [cx, cy] = toCanvas(optimalPath.x[i] - 0.02, optimalPath.y[i]);
-      i === 0 ? footpathCtx.moveTo(cx, cy) : footpathCtx.lineTo(cx, cy);
+    for (let i=0; i<optimalPath.x.length; i++) {
+      const [cx,cy] = toCanvas(optimalPath.x[i]-0.02, optimalPath.y[i]);
+      i===0 ? footpathCtx.moveTo(cx,cy) : footpathCtx.lineTo(cx,cy);
     }
-    // Right edge (reversed)
-    for (let i = optimalPath.x.length - 1; i >= 0; i--) {
-      const [cx, cy] = toCanvas(optimalPath.x[i] + 0.02, optimalPath.y[i]);
-      footpathCtx.lineTo(cx, cy);
+    for (let i=optimalPath.x.length-1; i>=0; i--) {
+      const [cx,cy] = toCanvas(optimalPath.x[i]+0.02, optimalPath.y[i]);
+      footpathCtx.lineTo(cx,cy);
     }
     footpathCtx.closePath();
-    footpathCtx.fillStyle = 'rgba(167,139,250,0.18)';  // light purple
-    footpathCtx.fill();
-  }
+    footpathCtx.fillStyle = 'rgba(167,139,250,0.18)'; footpathCtx.fill();
 
-  // Optimal path (dashed grey)
-  if (optimalPath && optimalPath.x.length >= 2) {
     footpathCtx.beginPath();
-    footpathCtx.setLineDash([6, 5]);
-    footpathCtx.strokeStyle = '#9CA3AF';
-    footpathCtx.lineWidth   = 2;
-    for (let i = 0; i < optimalPath.x.length; i++) {
-      const [cx, cy] = toCanvas(optimalPath.x[i], optimalPath.y[i]);
-      i === 0 ? footpathCtx.moveTo(cx, cy) : footpathCtx.lineTo(cx, cy);
+    footpathCtx.setLineDash([6,5]); footpathCtx.strokeStyle = '#9CA3AF'; footpathCtx.lineWidth = 2;
+    for (let i=0; i<optimalPath.x.length; i++) {
+      const [cx,cy] = toCanvas(optimalPath.x[i], optimalPath.y[i]);
+      i===0 ? footpathCtx.moveTo(cx,cy) : footpathCtx.lineTo(cx,cy);
     }
-    footpathCtx.stroke();
-    footpathCtx.setLineDash([]);
+    footpathCtx.stroke(); footpathCtx.setLineDash([]);
   }
 
-  // Actual path (solid blue)
   footpathCtx.beginPath();
-  footpathCtx.strokeStyle = CLR.info;
-  footpathCtx.lineWidth   = 2.5;
-  footpathCtx.lineJoin    = 'round';
-  for (let i = 0; i < footPath.x.length; i++) {
-    const [cx, cy] = toCanvas(footPath.x[i], footPath.y[i]);
-    i === 0 ? footpathCtx.moveTo(cx, cy) : footpathCtx.lineTo(cx, cy);
+  footpathCtx.strokeStyle = CLR.info; footpathCtx.lineWidth = 2.5; footpathCtx.lineJoin = 'round';
+  for (let i=0; i<footPath.x.length; i++) {
+    const [cx,cy] = toCanvas(footPath.x[i], footPath.y[i]);
+    i===0 ? footpathCtx.moveTo(cx,cy) : footpathCtx.lineTo(cx,cy);
   }
   footpathCtx.stroke();
 
-  // Animated dot at latest position
   const last = footPath.x.length - 1;
-  const [dotX, dotY] = toCanvas(footPath.x[last], footPath.y[last]);
-  animDotX = dotX;
-  animDotY = dotY;
-
-  drawAnimDot();
+  [animDotX, animDotY] = toCanvas(footPath.x[last], footPath.y[last]);
 }
 
 let dotPhase = 0;
@@ -255,273 +299,406 @@ function drawAnimDot() {
   if (animDotX === null) return;
   dotPhase = (dotPhase + 0.07) % (2 * Math.PI);
   const pulse = 5 + 2 * Math.sin(dotPhase);
-
-  // Re-draw over existing canvas (non-destructive dot animation)
   footpathCtx.beginPath();
-  footpathCtx.arc(animDotX, animDotY, pulse, 0, 2 * Math.PI);
-  footpathCtx.fillStyle = 'rgba(59,130,246,0.3)';
-  footpathCtx.fill();
-
+  footpathCtx.arc(animDotX, animDotY, pulse, 0, 2*Math.PI);
+  footpathCtx.fillStyle = 'rgba(59,130,246,0.3)'; footpathCtx.fill();
   footpathCtx.beginPath();
-  footpathCtx.arc(animDotX, animDotY, 4, 0, 2 * Math.PI);
-  footpathCtx.fillStyle = CLR.info;
-  footpathCtx.fill();
+  footpathCtx.arc(animDotX, animDotY, 4, 0, 2*Math.PI);
+  footpathCtx.fillStyle = CLR.info; footpathCtx.fill();
 }
 
 // =========================================================================
-// SVG GAUGES
+// SVG GAUGES  (fixed — arc sweeps through TOP of semicircle)
+//
+// valueToAngleDeg: [totalMin…totalMax] → [180°…0°]  (decreasing)
+//   min value → 180° (left),  mid → 90° (top),  max → 0° (right)
+//
+// polar(deg) uses  y = CY − R·sin(deg)  to flip Y-axis into SVG space.
+//
+// arcPath with sweep-flag=0 (counter-clockwise in SVG/screen) from a
+// higher angle to a lower angle travels through the top of the circle. ✓
+//
+// Needle: default points straight UP.  Rotation = (90 − needleAngle).
+//   needleAngle=180 → rotate(−90) → points left  ✓
+//   needleAngle= 90 → rotate(  0) → points up    ✓
+//   needleAngle=  0 → rotate( 90) → points right ✓
 // =========================================================================
-
-/**
- * Draw a semicircular gauge SVG with colour zones.
- *
- * @param {string}  svgId      - id of the <svg> element
- * @param {string}  arcsId     - id of the <g> for arcs
- * @param {string}  needleId   - id of the needle <line>
- * @param {string}  valTextId  - id of value <text>
- * @param {Array}   zones      - [{min, max, color}] in real units
- * @param {number}  totalMin   - minimum displayed value
- * @param {number}  totalMax   - maximum displayed value
- * @param {number}  value      - current value
- * @param {string}  unit       - unit string appended to label
- */
-function updateGauge(svgId, arcsId, needleId, valTextId, zones, totalMin, totalMax, value, unit) {
-  const svg     = document.getElementById(svgId);
+function drawGauge(_svgId, arcsId, needleId, valTextId,
+                   zones, totalMin, totalMax, value, unit) {
   const arcsG   = document.getElementById(arcsId);
   const needle  = document.getElementById(needleId);
   const valText = document.getElementById(valTextId);
+  if (!arcsG || !needle || !valText) return;
 
-  // Gauge geometry: semicircle centred at (100,110), radius 70
   const CX = 100, CY = 110, R = 70;
-  // 180° sweep: leftmost = 180°, rightmost = 0° (angles in CSS/SVG terms)
-  // Map value range [totalMin, totalMax] -> angle [-180, 0] in standard math (deg)
 
-  function valueToAngleDeg(v) {
-    const frac = (v - totalMin) / (totalMax - totalMin);
-    // Map totalMin → 180° (left), totalMax → 0° (right), midpoint → 90° (top).
-    // Decreasing so arcs drawn left→right all go through the upper semicircle.
-    return 180 - frac * 180;
+  function v2a(v) {                          // value → SVG angle (180°→0°)
+    return 180 - ((v - totalMin) / (totalMax - totalMin)) * 180;
   }
-
-  /** polar -> cartesian for SVG */
-  function polar(angleDeg, r) {
-    const rad = (angleDeg * Math.PI) / 180;
+  function polar(deg, r) {
+    const rad = deg * Math.PI / 180;
     return [CX + r * Math.cos(rad), CY - r * Math.sin(rad)];
   }
-
-  /** SVG arc path for an annulus sector */
-  function arcPath(startDeg, endDeg, r, strokeW) {
-    const [sx, sy] = polar(startDeg, r);
-    const [ex, ey] = polar(endDeg, r);
-    const large = Math.abs(endDeg - startDeg) >= 180 ? 1 : 0;
-    // sweep=1 (CW in SVG screen space) is required: our polar() maps standard-math
-    // angles into SVG Y-down space, so a decreasing angle (180°→0°) is CW on screen.
-    return `M ${sx} ${sy} A ${r} ${r} 0 ${large} 1 ${ex} ${ey}`;
+  function arcPath(aDeg, bDeg) {
+    const [sx, sy] = polar(aDeg, R), [ex, ey] = polar(bDeg, R);
+    const large = Math.abs(aDeg - bDeg) >= 180 ? 1 : 0;
+    return `M ${sx.toFixed(2)} ${sy.toFixed(2)} A ${R} ${R} 0 ${large} 0 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
   }
 
-  // Draw arcs only once (or when gauge hasn't been set up yet)
   if (!arcsG.dataset.ready) {
     arcsG.innerHTML = '';
+    // Grey background track
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    bg.setAttribute('d', arcPath(180, 0));
+    bg.setAttribute('fill', 'none'); bg.setAttribute('stroke', '#E5E7EB');
+    bg.setAttribute('stroke-width', '14'); bg.setAttribute('stroke-linecap', 'butt');
+    arcsG.appendChild(bg);
+    // Coloured zone arcs
     zones.forEach(z => {
-      const startA = valueToAngleDeg(z.min);
-      const endA   = valueToAngleDeg(z.max);
-      const path   = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d',            arcPath(startA, endA, R));
-      path.setAttribute('fill',         'none');
-      path.setAttribute('stroke',       z.color);
-      path.setAttribute('stroke-width', '14');
-      path.setAttribute('stroke-linecap', 'butt');
-      arcsG.appendChild(path);
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      p.setAttribute('d', arcPath(v2a(z.min), v2a(z.max)));
+      p.setAttribute('fill', 'none'); p.setAttribute('stroke', z.color);
+      p.setAttribute('stroke-width', '14'); p.setAttribute('stroke-linecap', 'butt');
+      arcsG.appendChild(p);
     });
     arcsG.dataset.ready = '1';
   }
 
-  // Clamp and compute needle angle
-  const clamped    = Math.max(totalMin, Math.min(totalMax, value));
-  const needleAngle = valueToAngleDeg(clamped);  // SVG degrees, from right (0°)
-
-  // Needle default SVG position is straight UP (x1=CX, y1=CY, x2=CX, y2=CY-R).
-  // We need rotate(90 - needleAngle) around the pivot so that:
-  //   needleAngle=180° (left)  → rotate(-90) → points left  ✓
-  //   needleAngle= 90° (top)   → rotate(  0) → points up    ✓
-  //   needleAngle=  0° (right) → rotate( 90) → points right ✓
-  needle.setAttribute('transform', `rotate(${90 - needleAngle} ${CX} ${CY})`);
-
+  const clamped = Math.max(totalMin, Math.min(totalMax, value));
+  needle.setAttribute('transform', `rotate(${(90 - v2a(clamped)).toFixed(2)} ${CX} ${CY})`);
   valText.textContent = value.toFixed(1) + (unit || '°');
 }
 
+const PRONATION_ZONES = [
+  { min: -30, max:  -5, color: CLR.alert   },
+  { min:  -5, max:  15, color: CLR.good    },
+  { min:  15, max:  30, color: CLR.alert   },
+];
+const IMPACT_ZONES = [
+  { min: -20, max:  -5, color: CLR.alert   },
+  { min:  -5, max:  10, color: CLR.good    },
+  { min:  10, max:  25, color: CLR.warning },
+];
+
 function initGauges() {
-  // Pronation gauge: totalMin=-30, totalMax=+30
-  // Zones: supination (-30 to -5) red, neutral (-5 to +15) green, overpronation (+15 to +30) red
-  updateGauge(
-    'pronation-gauge', 'pronation-arcs', 'pronation-needle', 'pronation-val',
-    [
-      { min: -30, max: -5,  color: CLR.alert   },
-      { min:  -5, max:  15, color: CLR.good    },
-      { min:  15, max:  30, color: CLR.alert   },
-    ],
-    -30, 30, 0, '°'
-  );
-
-  // Impact angle gauge: totalMin=-20, totalMax=+25
-  // Zones: heel-strike (-20 to -5) red, optimal (-5 to +10) green, forefoot (+10 to +25) red
-  updateGauge(
-    'impact-gauge', 'impact-arcs', 'impact-needle', 'impact-val',
-    [
-      { min: -20, max:  -5, color: CLR.alert   },
-      { min:  -5, max:  10, color: CLR.good    },
-      { min:  10, max:  25, color: CLR.warning },
-    ],
-    -20, 25, 0, '°'
-  );
-
-  gaugesInitialised = true;
+  drawGauge('pronation-gauge','pronation-arcs','pronation-needle','pronation-val', PRONATION_ZONES,-30,30,0,'°');
+  drawGauge('impact-gauge','impact-arcs','impact-needle','impact-val', IMPACT_ZONES,-20,25,0,'°');
+  gaugesReady = true;
 }
-
-function updateGauges(rollAngle, impactAngle) {
-  if (!gaugesInitialised) initGauges();
-
-  if (rollAngle !== undefined) {
-    updateGauge(
-      'pronation-gauge', 'pronation-arcs', 'pronation-needle', 'pronation-val',
-      [
-        { min: -30, max: -5,  color: CLR.alert },
-        { min:  -5, max:  15, color: CLR.good  },
-        { min:  15, max:  30, color: CLR.alert },
-      ],
-      -30, 30, rollAngle, '°'
-    );
-  }
-
-  if (impactAngle !== undefined) {
-    updateGauge(
-      'impact-gauge', 'impact-arcs', 'impact-needle', 'impact-val',
-      [
-        { min: -20, max:  -5, color: CLR.alert   },
-        { min:  -5, max:  10, color: CLR.good    },
-        { min:  10, max:  25, color: CLR.warning },
-      ],
-      -20, 25, impactAngle, '°'
-    );
-  }
+function updateGauges(roll, impact) {
+  if (!gaugesReady) initGauges();
+  if (roll   !== undefined) drawGauge('pronation-gauge','pronation-arcs','pronation-needle','pronation-val',PRONATION_ZONES,-30,30,roll,'°');
+  if (impact !== undefined) drawGauge('impact-gauge','impact-arcs','impact-needle','impact-val',IMPACT_ZONES,-20,25,impact,'°');
 }
 
 // =========================================================================
-// FEEDBACK PANEL
+// FEEDBACK — CURRENT STEP
+// Only re-renders when data.timestamp changes (one update per step event).
 // =========================================================================
+function updateCurrentFeedback(feedbackArr) {
+  const container = document.getElementById('feedbackCurrent');
+  if (!container) return;
+  container.innerHTML = '';
 
-const FEEDBACK_ICONS = {
-  OK:      '✓',
-  INFO:    'ℹ',
-  WARNING: '⚠',
-  ALERT:   '✕',
-};
+  if (!feedbackArr || feedbackArr.length === 0) {
+    container.innerHTML = '<div class="feedback-empty">No issues detected this step.</div>';
+    return;
+  }
 
-function updateFeedback(feedbackArr) {
-  if (!feedbackArr || !Array.isArray(feedbackArr) || feedbackArr.length === 0) return;
-
-  const list = document.getElementById('feedbackList');
-
-  // Clear "waiting" placeholder on first real data
-  const empty = list.querySelector('.feedback-empty');
-  if (empty) empty.remove();
-
-  // Add new messages to the front of the queue
   feedbackArr.forEach(fb => {
     const level = (fb.level || 'INFO').toUpperCase();
-    feedbackQueue.unshift({ level, message: fb.message });
-  });
-
-  // Keep only latest MAX_FEEDBACK items
-  feedbackQueue = feedbackQueue.slice(0, MAX_FEEDBACK);
-
-  // Re-render list
-  list.innerHTML = '';
-  feedbackQueue.forEach(fb => {
-    const li   = document.createElement('li');
-    li.className = `feedback-item ${fb.level.toLowerCase()}`;
+    const div   = document.createElement('div');
+    div.className = `feedback-now-item ${level.toLowerCase()}`;
 
     const icon = document.createElement('span');
-    icon.className = 'feedback-icon';
+    icon.className = 'feedback-now-icon';
+    icon.textContent = FEEDBACK_ICONS[level] || 'ℹ';
+
+    const body  = document.createElement('div');
+    body.className = 'feedback-now-body';
+
+    const badge = document.createElement('span');
+    badge.className = `feedback-level-badge ${level.toLowerCase()}`;
+    badge.textContent = level;
+
+    const msg = document.createElement('p');
+    msg.className   = 'feedback-now-msg';
+    msg.textContent = fb.message;
+
+    body.appendChild(badge); body.appendChild(msg);
+    div.appendChild(icon);   div.appendChild(body);
+    container.appendChild(div);
+  });
+}
+
+// =========================================================================
+// FEEDBACK — UNIQUE STORE + SESSION LOG
+// Each distinct message is stored exactly once in feedbackStore.
+// count increments on every repeat occurrence.
+// =========================================================================
+function ingestFeedback(feedbackArr) {
+  if (!feedbackArr || feedbackArr.length === 0) return false;
+
+  const now = new Date();
+  let changed = false;
+
+  feedbackArr.forEach(fb => {
+    const msg   = fb.message;
+    const level = (fb.level || 'INFO').toUpperCase();
+    if (!msg) return;
+
+    if (feedbackStore[msg]) {
+      // Already known — just update count and recency
+      feedbackStore[msg].count++;
+      feedbackStore[msg].lastSeen  = now;
+      feedbackStore[msg].level     = level;  // update in case severity changed
+    } else {
+      // New unique message
+      feedbackStore[msg] = { level, message: msg, firstSeen: now, lastSeen: now, count: 1 };
+      changed = true;  // new entry — need to re-render log
+    }
+  });
+
+  return changed;
+}
+
+function renderFeedbackLog() {
+  const list = document.getElementById('feedbackLog');
+  if (!list) return;
+
+  const entries = Object.values(feedbackStore)
+    .sort((a, b) => b.lastSeen - a.lastSeen);  // most recent first
+
+  list.innerHTML = '';
+
+  const countEl = document.getElementById('logCount');
+  if (countEl) countEl.textContent = entries.length || '';
+
+  if (entries.length === 0) {
+    list.innerHTML = '<li class="log-empty">No events yet.</li>';
+    return;
+  }
+
+  const fmt = d => [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map(n => String(n).padStart(2,'0')).join(':');
+
+  entries.forEach(fb => {
+    const li = document.createElement('li');
+    li.className = `log-item ${fb.level.toLowerCase()}`;
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'log-time';
+    timeSpan.textContent = fmt(fb.firstSeen);
+
+    const icon = document.createElement('span');
+    icon.className = 'log-icon';
     icon.textContent = FEEDBACK_ICONS[fb.level] || 'ℹ';
 
-    const txt = document.createElement('span');
-    txt.className = 'feedback-text';
-    txt.textContent = fb.message;
+    const badge = document.createElement('span');
+    badge.className = `log-badge ${fb.level.toLowerCase()}`;
+    badge.textContent = fb.level;
 
-    li.appendChild(icon);
-    li.appendChild(txt);
+    const msgSpan = document.createElement('span');
+    msgSpan.className   = 'log-msg';
+    msgSpan.textContent = fb.message;
+
+    const countBadge = document.createElement('span');
+    countBadge.className = 'log-count-badge';
+    countBadge.textContent = fb.count > 1 ? `×${fb.count}` : '';
+
+    li.appendChild(timeSpan); li.appendChild(icon); li.appendChild(badge);
+    li.appendChild(msgSpan);  li.appendChild(countBadge);
     list.appendChild(li);
   });
 }
 
 // =========================================================================
+// GENERATE SUMMARY REPORT
+// =========================================================================
+function generateReport() {
+  const entries = Object.values(feedbackStore);
+
+  // Sort by severity then priority
+  const LEVEL_ORDER = { ALERT: 0, WARNING: 1, INFO: 2, OK: 3 };
+  const sorted = [...entries].sort((a, b) => {
+    const la = LEVEL_ORDER[a.level] ?? 4;
+    const lb = LEVEL_ORDER[b.level] ?? 4;
+    if (la !== lb) return la - lb;
+    const pa = getAdvice(a.message)?.priority ?? 9;
+    const pb = getAdvice(b.message)?.priority ?? 9;
+    return pa - pb;
+  });
+
+  const issues  = sorted.filter(e => e.level !== 'OK');
+  const allGood = sorted.filter(e => e.level === 'OK');
+  const alerts   = issues.filter(e => e.level === 'ALERT');
+  const warnings = issues.filter(e => e.level === 'WARNING');
+  const infos    = issues.filter(e => e.level === 'INFO');
+
+  const now       = new Date();
+  const fmtDate   = d => d.toLocaleTimeString();
+  const scoreStr  = lastKnownScores
+    ? `Overall ${Math.round(lastKnownScores.overall)}/100  ·  Cadence ${Math.round(lastKnownScores.cadence)}/100  ·  Strike ${Math.round(lastKnownScores.strike)}/100  ·  Pronation ${Math.round(lastKnownScores.pronation)}/100  ·  Lateral ${Math.round(lastKnownScores.lateral)}/100`
+    : 'Scores not yet available (need 10+ steps)';
+
+  // Build HTML for the report body
+  let html = `
+    <div class="report-meta">
+      <span>Generated at <strong>${fmtDate(now)}</strong></span>
+      ${sessionStartTime ? `<span>Session started <strong>${fmtDate(sessionStartTime)}</strong></span>` : ''}
+      <span>Steps recorded: <strong>${totalSteps}</strong></span>
+      <span>Unique issues: <strong>${issues.length}</strong></span>
+    </div>
+
+    <div class="report-scores">
+      <div class="report-section-title">Performance Scores</div>
+      <p class="report-score-str">${scoreStr}</p>
+    </div>
+  `;
+
+  if (issues.length === 0) {
+    html += `
+      <div class="report-all-good">
+        <span class="report-all-good-icon">✓</span>
+        <div>
+          <strong>No issues recorded this session.</strong>
+          <p>Your running form looks great — keep up the good work!</p>
+        </div>
+      </div>`;
+  } else {
+    // Issues by severity
+    const renderGroup = (title, colour, groupEntries) => {
+      if (groupEntries.length === 0) return '';
+      let g = `<div class="report-group">
+        <div class="report-group-title" style="color:${colour}">${title}</div>`;
+      groupEntries.forEach(e => {
+        const adv = getAdvice(e.message);
+        g += `<div class="report-issue">
+          <div class="report-issue-header">
+            <span class="report-issue-msg">${e.message}</span>
+            <span class="report-issue-count">seen ${e.count}×</span>
+          </div>`;
+        if (adv && adv.tips.length > 0) {
+          g += `<div class="report-issue-advice">
+            <span class="report-advice-label">${adv.drill ? `Drill: ${adv.drill}` : 'Tip'}</span>
+            <ul class="report-tips">`;
+          adv.tips.forEach(tip => { g += `<li>${tip}</li>`; });
+          g += `</ul></div>`;
+        }
+        g += `</div>`;
+      });
+      g += `</div>`;
+      return g;
+    };
+
+    html += renderGroup('🔴  High Priority — Fix These First', CLR.alert,   alerts);
+    html += renderGroup('🟡  Needs Attention',                  CLR.warning, warnings);
+    html += renderGroup('🔵  Notes',                            CLR.info,    infos);
+
+    // Action plan: top 3 priority items with advice
+    const actionItems = issues
+      .filter(e => getAdvice(e.message))
+      .sort((a, b) => {
+        const pa = getAdvice(a.message)?.priority ?? 9;
+        const pb = getAdvice(b.message)?.priority ?? 9;
+        return pa - pb;
+      })
+      .slice(0, 3);
+
+    if (actionItems.length > 0) {
+      html += `<div class="report-action-plan">
+        <div class="report-section-title">Your Action Plan</div>
+        <p class="report-action-intro">Focus on these in order — fixing higher-priority issues often resolves lower ones naturally.</p>
+        <ol class="report-action-list">`;
+      actionItems.forEach(e => {
+        const adv = getAdvice(e.message);
+        html += `<li>
+          <strong>${adv.title}</strong>
+          ${adv.drill ? `<span class="report-drill-tag">Drill: ${adv.drill}</span>` : ''}
+          <ul class="report-tips">`;
+        adv.tips.forEach(tip => { html += `<li>${tip}</li>`; });
+        html += `</ul></li>`;
+      });
+      html += `</ol></div>`;
+    }
+  }
+
+  if (allGood.length > 0) {
+    html += `<div class="report-good-section">
+      <div class="report-section-title">✓  What Went Well</div>
+      <ul class="report-good-list">`;
+    allGood.forEach(e => { html += `<li>${e.message}</li>`; });
+    html += `</ul></div>`;
+  }
+
+  // Inject into modal and show
+  document.getElementById('reportBody').innerHTML = html;
+  document.getElementById('reportModal').classList.add('open');
+}
+
+function closeReport() {
+  document.getElementById('reportModal').classList.remove('open');
+}
+
+// =========================================================================
 // SCORE PANEL
 // =========================================================================
+function scoreColor(s) { return s >= 80 ? CLR.good : s >= 50 ? CLR.warning : CLR.alert; }
 
 function updateScores(scores, stepCount) {
   if (!scores || stepCount < STEP_SCORE_THRESH) return;
-
-  // Show panel
+  lastKnownScores = scores;
   document.getElementById('scorePanel').classList.add('visible');
 
   const overall = Math.round(scores.overall || 0);
   document.getElementById('scoreOverallNum').textContent = overall;
-
-  // Ring chart: circumference of r=50 circle = 2π×50 ≈ 314
-  const circ = 2 * Math.PI * 50;
-  const fill  = (overall / 100) * circ;
-  const ring  = document.getElementById('ringFill');
-  ring.setAttribute('stroke-dasharray', `${fill} ${circ - fill}`);
+  const circ = 2 * Math.PI * 50, fill = (overall / 100) * circ;
+  const ring = document.getElementById('ringFill');
+  ring.setAttribute('stroke-dasharray', `${fill.toFixed(2)} ${(circ-fill).toFixed(2)}`);
   ring.setAttribute('stroke', scoreColor(overall));
 
-  setScoreBar('bar-cadence',   'barval-cadence',   scores.cadence   || 0);
-  setScoreBar('bar-strike',    'barval-strike',    scores.strike    || 0);
-  setScoreBar('bar-pronation', 'barval-pronation', scores.pronation || 0);
-  setScoreBar('bar-lateral',   'barval-lateral',   scores.lateral   || 0);
-}
-
-function scoreColor(score) {
-  if (score >= 80) return CLR.good;
-  if (score >= 50) return CLR.warning;
-  return CLR.alert;
-}
-
-function setScoreBar(barId, valId, score) {
-  const bar = document.getElementById(barId);
-  const val = document.getElementById(valId);
-  const pct = Math.max(0, Math.min(100, Math.round(score)));
-  bar.style.width = pct + '%';
-  bar.style.background = scoreColor(pct);
-  val.textContent = pct;
+  [['bar-cadence','barval-cadence',scores.cadence],
+   ['bar-strike', 'barval-strike', scores.strike],
+   ['bar-pronation','barval-pronation',scores.pronation],
+   ['bar-lateral','barval-lateral',scores.lateral]].forEach(([barId,valId,score]) => {
+    const pct = Math.max(0, Math.min(100, Math.round(score || 0)));
+    const bar = document.getElementById(barId);
+    bar.style.width = pct + '%'; bar.style.background = scoreColor(pct);
+    document.getElementById(valId).textContent = pct;
+  });
 }
 
 // =========================================================================
 // MAIN POLL LOOP
 // =========================================================================
-
 async function fetchData() {
   try {
-    const res = await fetch('data.json?t=' + Date.now());  // cache-bust
-    if (!res.ok) {
-      updateConnectionStatus(0);
-      return;
-    }
+    const res = await fetch('data.json?t=' + Date.now());
+    if (!res.ok) { updateConnectionStatus(0); return; }
 
     const data = await res.json();
-
-    // Guard against empty placeholder {}
-    if (!data.timestamp) {
-      updateConnectionStatus(0);
-      return;
-    }
+    if (!data.timestamp) { updateConnectionStatus(0); return; }
 
     updateConnectionStatus(data.timestamp);
     updateMetricCards(data);
     updateFootPath(data.footPath, data.optimalPath);
     updateGauges(data.rollAngle, data.impactAngle);
-    updateFeedback(data.feedback);
     updateScores(data.scores, data.stepCount || 0);
+
+    // Only process feedback when MATLAB writes a new step (timestamp changes)
+    if (data.timestamp !== lastDataTs) {
+      lastDataTs = data.timestamp;
+      totalSteps = data.stepCount || totalSteps;
+      if (!sessionStartTime) sessionStartTime = new Date();
+
+      updateCurrentFeedback(data.feedback);
+
+      // Add to unique store; re-render log only when new messages appear
+      const newEntries = ingestFeedback(data.feedback);
+      if (newEntries) renderFeedbackLog();
+      // Always re-render counts even if no new entries (count may have changed)
+      else if (data.feedback && data.feedback.length > 0) renderFeedbackLog();
+    }
 
   } catch (e) {
     updateConnectionStatus(0);
@@ -531,15 +708,10 @@ async function fetchData() {
 // =========================================================================
 // STARTUP
 // =========================================================================
-
-// Initialise gauges with default 0° position
 initGauges();
-
-// Start polling
 setInterval(fetchData, POLL_INTERVAL);
-fetchData();  // immediate first call
+fetchData();
 
-// Draw animated dot on canvas continuously
 (function animLoop() {
   if (animDotX !== null) drawAnimDot();
   requestAnimationFrame(animLoop);
