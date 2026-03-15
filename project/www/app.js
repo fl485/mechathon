@@ -20,16 +20,94 @@ const CLR = {
 const FEEDBACK_ICONS = { OK: '✓', INFO: 'ℹ', WARNING: '⚠', ALERT: '✕' };
 
 // =========================================================================
+// RECORDING STATE
+// =========================================================================
+let isRecording = false;
+
+function toggleRecording() {
+  if (isRecording) {
+    stopSession();
+  } else {
+    startSession();
+  }
+}
+
+function startSession() {
+  // Reset all session data
+  lastStepCount        = -1;
+  sessionBaseStepCount = null;  // set on first poll — ignores old JSON data
+  sessionSteps         = 0;
+  prevCadence          = null;
+  prevImpact           = null;
+  prevAngle            = null;
+  sessionStartTime     = new Date();  // timer starts immediately on Start
+  totalSteps           = 0;
+  lastKnownScores      = null;
+  animDotX             = null;
+  animDotY             = null;
+
+  // Clear feedback store
+  Object.keys(feedbackStore).forEach(k => delete feedbackStore[k]);
+
+  // Reset UI
+  const fc = document.getElementById('feedbackCurrent');
+  if (fc) fc.innerHTML = '<div class="feedback-empty">Waiting for first step...</div>';
+  const fl = document.getElementById('feedbackLog');
+  if (fl) fl.innerHTML = '<li class="log-empty">No events yet.</li>';
+  const lc = document.getElementById('logCount');
+  if (lc) lc.textContent = '';
+  document.getElementById('scorePanel').classList.remove('visible');
+  document.getElementById('stat-steps').textContent    = '0';
+  document.getElementById('stat-lateral').textContent  = '—';
+  document.getElementById('stat-sidestep').textContent = 'Normal';
+  document.getElementById('stat-sidestep-chip').className = 'stat-chip';
+  document.getElementById('stat-time').textContent = '0:00';
+  ['cadence','strike','impact','angle'].forEach(id => {
+    document.getElementById(`val-${id}`).textContent   = '—';
+    document.getElementById(`badge-${id}`).textContent = '—';
+    document.getElementById(`badge-${id}`).className   = 'status-badge';
+    document.getElementById(`card-${id}`).className    = 'metric-card';
+  });
+  footpathCtx.clearRect(0, 0, footpathCanvas.width, footpathCanvas.height);
+  footpathCtx.fillStyle = '#F0F4FF';
+  footpathCtx.fillRect(0, 0, footpathCanvas.width, footpathCanvas.height);
+  initGauges();
+
+  isRecording = true;
+  updateRecordButton();
+}
+
+function stopSession() {
+  isRecording = false;
+  updateRecordButton();
+}
+
+function updateRecordButton() {
+  const btn   = document.getElementById('recordBtn');
+  const label = document.getElementById('recordLabel');
+  if (!btn) return;
+  if (isRecording) {
+    btn.className   = 'record-btn recording';
+    label.textContent = 'Stop Recording';
+  } else {
+    btn.className   = 'record-btn';
+    label.textContent = 'Start Recording';
+  }
+}
+
+// =========================================================================
 // SESSION STATE
 // =========================================================================
-let lastStepCount    = -1;     // last stepCount we processed — triggers feedback on increase
+let lastStepCount         = -1;   // last data.stepCount processed
+let sessionBaseStepCount  = null; // data.stepCount when recording started — ignore anything at/below this
+let sessionSteps          = 0;    // steps recorded in THIS session
 let prevCadence      = null;
 let prevImpact       = null;
 let prevAngle        = null;
 let gaugesReady      = false;
-let sessionStartTime = null;   // Date of first step
+let sessionStartTime = null;
 let totalSteps       = 0;
-let lastKnownScores  = null;   // updated every poll
+let lastKnownScores  = null;
 
 // Unique feedback store.
 // Key: message text.  Value: { level, message, firstSeen: Date, count, lastSeen: Date }
@@ -315,8 +393,8 @@ function drawAnimDot() {
 //
 // polar(deg) uses  y = CY − R·sin(deg)  to flip Y-axis into SVG space.
 //
-// arcPath with sweep-flag=0 (counter-clockwise in SVG/screen) from a
-// higher angle to a lower angle travels through the top of the circle. ✓
+// arcPath with sweep-flag=1 (positive/clockwise in SVG param space) goes
+// through the top of the circle: SVG θ=270° = (cx, cy−r) = top on screen. ✓
 //
 // Needle: default points straight UP.  Rotation = (90 − needleAngle).
 //   needleAngle=180 → rotate(−90) → points left  ✓
@@ -671,6 +749,47 @@ function updateScores(scores, stepCount) {
 }
 
 // =========================================================================
+// SESSION TIMER
+// =========================================================================
+let sessionTimerEl = null;
+
+function updateSessionTimer() {
+  if (!sessionTimerEl) sessionTimerEl = document.getElementById('stat-time');
+  if (!isRecording || !sessionStartTime || !sessionTimerEl) return;
+  const secs  = Math.floor((Date.now() - sessionStartTime) / 1000);
+  const m     = Math.floor(secs / 60);
+  const s     = secs % 60;
+  sessionTimerEl.textContent = `${m}:${String(s).padStart(2,'0')}`;
+}
+setInterval(updateSessionTimer, 1000);
+
+// =========================================================================
+// STATS ROW
+// =========================================================================
+function updateStatsRow(stepCount, lateralDisp_m, isSidestep) {
+  const stepsEl    = document.getElementById('stat-steps');
+  const latEl      = document.getElementById('stat-lateral');
+  const sideEl     = document.getElementById('stat-sidestep');
+  const sideChip   = document.getElementById('stat-sidestep-chip');
+
+  if (stepsEl) stepsEl.textContent = stepCount || 0;
+
+  if (latEl && lateralDisp_m !== undefined) {
+    latEl.textContent = (lateralDisp_m * 100).toFixed(1);
+  }
+
+  if (sideEl && sideChip) {
+    if (isSidestep) {
+      sideEl.textContent  = 'Crossover';
+      sideChip.className  = 'stat-chip alert';
+    } else {
+      sideEl.textContent  = 'Normal';
+      sideChip.className  = 'stat-chip good';
+    }
+  }
+}
+
+// =========================================================================
 // MAIN POLL LOOP
 // =========================================================================
 async function fetchData() {
@@ -681,25 +800,38 @@ async function fetchData() {
     const data = await res.json();
     if (!data.timestamp) { updateConnectionStatus(0); return; }
 
+    // Always update connection status so the indicator stays live
     updateConnectionStatus(data.timestamp);
+
+    // Only process and display data when a session is active
+    if (!isRecording) return;
+
+    const currentStep = data.stepCount || 0;
+
+    // First poll after Start: record the baseline step count so we don't
+    // re-process feedback that was already in the file before recording began.
+    if (sessionBaseStepCount === null) {
+      sessionBaseStepCount = currentStep;
+      lastStepCount        = currentStep;
+    }
+
+    // Always update visuals while recording
     updateMetricCards(data);
     updateFootPath(data.footPath, data.optimalPath);
     updateGauges(data.rollAngle, data.impactAngle);
-    updateScores(data.scores, data.stepCount || 0);
+    updateScores(data.scores, sessionSteps);
+    updateStatsRow(sessionSteps, data.lateralDisp, data.isSidestep);
 
-    // Only process feedback when MATLAB writes a new step (timestamp changes)
-    const currentStep = data.stepCount || 0;
+    // Only process feedback for steps that arrived after recording started
     if (currentStep > lastStepCount) {
       lastStepCount = currentStep;
-      totalSteps    = currentStep;
-      if (!sessionStartTime) sessionStartTime = new Date();
+      sessionSteps++;
+      totalSteps = sessionSteps;
 
       updateCurrentFeedback(data.feedback);
 
-      // Add to unique store; re-render log only when new messages appear
       const newEntries = ingestFeedback(data.feedback);
       if (newEntries) renderFeedbackLog();
-      // Always re-render counts even if no new entries (count may have changed)
       else if (data.feedback && data.feedback.length > 0) renderFeedbackLog();
     }
 

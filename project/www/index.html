@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RunForm Analyser</title>
+  <title>Stayin' Alive</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -14,13 +14,17 @@
   <!-- ===== HEADER ===== -->
   <header class="app-header">
     <div class="header-left">
-      <span class="app-logo">&#9664; RunForm Analyser</span>
+      <span class="app-logo">&#9664; Stayin' Alive</span>
     </div>
     <div class="header-right">
       <div class="connection-indicator" id="connIndicator">
         <span class="conn-dot" id="connDot"></span>
         <span class="conn-label" id="connLabel">Connecting...</span>
       </div>
+      <button class="record-btn" id="recordBtn" onclick="toggleRecording()">
+        <span class="record-btn-dot" id="recordDot"></span>
+        <span id="recordLabel">Start Recording</span>
+      </button>
       <span class="header-clock" id="headerClock"></span>
     </div>
   </header>
@@ -91,6 +95,27 @@
         </div>
       </div>
 
+    </section>
+
+    <!-- Stats bar: secondary metrics -->
+    <section class="stats-row" aria-label="Session stats">
+      <div class="stat-chip">
+        <span class="stat-chip-label">Steps</span>
+        <span class="stat-chip-value" id="stat-steps">0</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Lateral Deviation</span>
+        <span class="stat-chip-value" id="stat-lateral">—</span>
+        <span class="stat-chip-unit">cm</span>
+      </div>
+      <div class="stat-chip" id="stat-sidestep-chip">
+        <span class="stat-chip-label">Gait Width</span>
+        <span class="stat-chip-value" id="stat-sidestep">Normal</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-chip-label">Session Time</span>
+        <span class="stat-chip-value" id="stat-time">0:00</span>
+      </div>
     </section>
 
     <!-- Visuals Row: foot path + gauges -->
