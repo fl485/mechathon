@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RunForm Analyser</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===== HEADER ===== -->
+  <header class="app-header">
+    <div class="header-left">
+      <span class="app-logo">&#9664; RunForm Analyser</span>
+    </div>
+    <div class="header-right">
+      <div class="connection-indicator" id="connIndicator">
+        <span class="conn-dot" id="connDot"></span>
+        <span class="conn-label" id="connLabel">Connecting...</span>
+      </div>
+      <span class="header-clock" id="headerClock"></span>
+    </div>
+  </header>
+
+  <!-- ===== MAIN DASHBOARD ===== -->
+  <main class="dashboard">
+
+    <!-- Metric Cards Row -->
+    <section class="metrics-row" aria-label="Key metrics">
+
+      <div class="metric-card" id="card-cadence">
+        <div class="card-header">
+          <span class="card-title">Cadence</span>
+          <span class="status-badge" id="badge-cadence">—</span>
+        </div>
+        <div class="card-body">
+          <span class="card-value" id="val-cadence">—</span>
+          <span class="card-unit">steps/min</span>
+        </div>
+        <div class="card-footer">
+          <span class="trend-arrow" id="trend-cadence">→</span>
+          <span class="card-hint">Target: 160–180 spm</span>
+        </div>
+      </div>
+
+      <div class="metric-card" id="card-strike">
+        <div class="card-header">
+          <span class="card-title">Foot Strike</span>
+          <span class="status-badge" id="badge-strike">—</span>
+        </div>
+        <div class="card-body">
+          <span class="card-value card-value--text" id="val-strike">—</span>
+          <span class="card-unit">&nbsp;</span>
+        </div>
+        <div class="card-footer">
+          <span class="trend-arrow" id="trend-strike">→</span>
+          <span class="card-hint">Aim for midfoot or forefoot</span>
+        </div>
+      </div>
+
+      <div class="metric-card" id="card-impact">
+        <div class="card-header">
+          <span class="card-title">Impact Force</span>
+          <span class="status-badge" id="badge-impact">—</span>
+        </div>
+        <div class="card-body">
+          <span class="card-value" id="val-impact">—</span>
+          <span class="card-unit">g</span>
+        </div>
+        <div class="card-footer">
+          <span class="trend-arrow" id="trend-impact">→</span>
+          <span class="card-hint">Target: under 2.5 g</span>
+        </div>
+      </div>
+
+      <div class="metric-card" id="card-angle">
+        <div class="card-header">
+          <span class="card-title">Foot Angle</span>
+          <span class="status-badge" id="badge-angle">—</span>
+        </div>
+        <div class="card-body">
+          <span class="card-value" id="val-angle">—</span>
+          <span class="card-unit">°</span>
+        </div>
+        <div class="card-footer">
+          <span class="trend-arrow" id="trend-angle">→</span>
+          <span class="card-hint">Target: 0° – 10°</span>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Visuals Row: foot path + gauges -->
+    <section class="visuals-row" aria-label="Visual analysis">
+
+      <!-- Foot path canvas -->
+      <div class="vis-card vis-card--path">
+        <div class="vis-card-title">Foot Path</div>
+        <div class="canvas-legend">
+          <span class="legend-item legend-item--actual">&#9644; Your Path</span>
+          <span class="legend-item legend-item--ideal">&#9644; Ideal Path</span>
+          <span class="legend-item legend-item--zone">&#9644; Tolerance Zone</span>
+        </div>
+        <canvas id="footpath" width="360" height="360" aria-label="Foot path trajectory"></canvas>
+      </div>
+
+      <!-- Pronation gauge -->
+      <div class="vis-card vis-card--gauge">
+        <div class="vis-card-title">Pronation / Supination</div>
+        <svg id="pronation-gauge" class="gauge-svg" viewBox="0 0 200 130" aria-label="Pronation gauge">
+          <!-- Arcs drawn by JS -->
+          <g id="pronation-arcs"></g>
+          <line id="pronation-needle" x1="100" y1="110" x2="100" y2="40"
+                stroke="#111827" stroke-width="3" stroke-linecap="round" />
+          <circle cx="100" cy="110" r="6" fill="#111827" />
+          <text id="pronation-val" x="100" y="97" text-anchor="middle"
+                font-size="14" font-weight="700" fill="#111827">0°</text>
+          <text x="12"  y="126" font-size="9" fill="#6B7280">Supination</text>
+          <text x="128" y="126" font-size="9" fill="#6B7280">Overpronation</text>
+        </svg>
+      </div>
+
+      <!-- Impact angle gauge -->
+      <div class="vis-card vis-card--gauge">
+        <div class="vis-card-title">Foot Strike Angle</div>
+        <svg id="impact-gauge" class="gauge-svg" viewBox="0 0 200 130" aria-label="Impact angle gauge">
+          <g id="impact-arcs"></g>
+          <line id="impact-needle" x1="100" y1="110" x2="100" y2="40"
+                stroke="#111827" stroke-width="3" stroke-linecap="round" />
+          <circle cx="100" cy="110" r="6" fill="#111827" />
+          <text id="impact-val" x="100" y="97" text-anchor="middle"
+                font-size="14" font-weight="700" fill="#111827">0°</text>
+          <text x="18"  y="126" font-size="9" fill="#6B7280">Heel Strike</text>
+          <text x="138" y="126" font-size="9" fill="#6B7280">Forefoot</text>
+        </svg>
+      </div>
+
+    </section>
+
+    <!-- Feedback Panel -->
+    <section class="feedback-panel" aria-label="Coaching feedback">
+
+      <!-- Current step feedback -->
+      <div class="feedback-section">
+        <h2 class="panel-title">Right Now</h2>
+        <div id="feedbackCurrent" class="feedback-current">
+          <div class="feedback-empty">Waiting for data...</div>
+        </div>
+      </div>
+
+      <!-- Deduplicated session log -->
+      <div class="feedback-section feedback-section--log">
+        <h2 class="panel-title">
+          Session Log
+          <span class="log-count" id="logCount"></span>
+        </h2>
+        <ul class="feedback-log" id="feedbackLog">
+          <li class="log-empty">No events yet.</li>
+        </ul>
+      </div>
+
+    </section>
+
+    <!-- Score Panel (hidden until 10+ steps) -->
+    <section class="score-panel" id="scorePanel" aria-label="Performance scores">
+      <h2 class="panel-title">Performance Scores</h2>
+
+      <div class="score-overall">
+        <svg class="ring-chart" viewBox="0 0 120 120" aria-label="Overall score ring">
+          <circle class="ring-bg" cx="60" cy="60" r="50"
+                  fill="none" stroke="#E5E7EB" stroke-width="12" />
+          <circle class="ring-fill" id="ringFill" cx="60" cy="60" r="50"
+                  fill="none" stroke="#22C55E" stroke-width="12"
+                  stroke-dasharray="0 314"
+                  stroke-dashoffset="78.5"
+                  stroke-linecap="round"
+                  transform="rotate(-90 60 60)" />
+          <text x="60" y="55" text-anchor="middle"
+                font-size="22" font-weight="800" fill="#111827" id="scoreOverallNum">—</text>
+          <text x="60" y="72" text-anchor="middle"
+                font-size="10" fill="#6B7280">OVERALL</text>
+        </svg>
+      </div>
+
+      <div class="score-bars">
+        <div class="score-bar-row">
+          <span class="score-bar-label">Cadence</span>
+          <div class="score-bar-track">
+            <div class="score-bar-fill" id="bar-cadence"></div>
+          </div>
+          <span class="score-bar-val" id="barval-cadence">—</span>
+        </div>
+        <div class="score-bar-row">
+          <span class="score-bar-label">Foot Strike</span>
+          <div class="score-bar-track">
+            <div class="score-bar-fill" id="bar-strike"></div>
+          </div>
+          <span class="score-bar-val" id="barval-strike">—</span>
+        </div>
+        <div class="score-bar-row">
+          <span class="score-bar-label">Pronation</span>
+          <div class="score-bar-track">
+            <div class="score-bar-fill" id="bar-pronation"></div>
+          </div>
+          <span class="score-bar-val" id="barval-pronation">—</span>
+        </div>
+        <div class="score-bar-row">
+          <span class="score-bar-label">Lateral</span>
+          <div class="score-bar-track">
+            <div class="score-bar-fill" id="bar-lateral"></div>
+          </div>
+          <span class="score-bar-val" id="barval-lateral">—</span>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

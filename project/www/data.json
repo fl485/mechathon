@@ -1,0 +1,16 @@
+{
+  "timestamp": 9999999999,
+  "cadence": 172,
+  "footStrike": "midfoot",
+  "az": 2.1,
+  "impactAngle": 5,
+  "rollAngle": 8,
+  "lateralDisp": 0.03,
+  "isSidestep": false,
+  "footPath": { "x": [0,1,2,1,0], "y": [0,10,20,30,40] },
+  "optimalPath": { "x": [0,0,0,0,0], "y": [0,10,20,30,40] },
+  "feedback": [
+    { "level": "OK", "message": "Great running form! Everything looks efficient." }
+  ],
+  "scores": { "overall": 85, "cadence": 90, "strike": 88, "pronation": 80, "lateral": 82 }
+}
