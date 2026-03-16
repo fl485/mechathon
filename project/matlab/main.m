@@ -160,12 +160,23 @@ while true
             latDisp    = max(abs(pos_x));
             isSidestep = latDisp > 0.05;
 
-            npts = min(20, numel(pos_x));
+            npts = min(40, numel(pos_x));
             idxs = round(linspace(1, numel(pos_x), npts));
-            footPath.x = pos_x(idxs);
-            footPath.y = pos_y(idxs);
-            optPath.x  = zeros(1, npts);
-            optPath.y  = pos_y(idxs);
+            fp_x = pos_x(idxs);
+            fp_y = pos_y(idxs);
+
+            % Build ideal parabolic arc over same x range
+            % y_ideal = 4 * h_ideal * (x/xmax) * (1 - x/xmax)
+            xmax     = max(fp_x);
+            h_ideal  = max(fp_y) * 1.05;   % ideal arc peaks 5% higher than actual
+            if xmax < 0.01, xmax = 1.0; end
+            opt_y = 4 * h_ideal * (fp_x ./ xmax) .* (1 - fp_x ./ xmax);
+            opt_y = max(opt_y, 0);         % clamp to ground
+
+            footPath.x = fp_x;
+            footPath.y = fp_y;
+            optPath.x  = fp_x;
+            optPath.y  = opt_y;
         end
 
         swingT = [];  swingAx = [];  swingAy = [];

@@ -325,32 +325,54 @@ let animDotX = null, animDotY = null;
 function updateFootPath(footPath, optimalPath) {
   if (!footPath || !footPath.x || footPath.x.length < 2) return;
   const W = footpathCanvas.width, H = footpathCanvas.height, PAD = 24;
+
+  // x = forward displacement, y = foot height — combine both paths for axis scaling
   const allX = [...footPath.x, ...(optimalPath ? optimalPath.x : [])];
   const allY = [...footPath.y, ...(optimalPath ? optimalPath.y : [])];
   const minX = Math.min(...allX), maxX = Math.max(...allX);
-  const minY = Math.min(...allY), maxY = Math.max(...allY);
-  const rangeX = maxX - minX || 0.001, rangeY = maxY - minY || 0.001;
+  const minY = 0;                                   // always start from ground
+  const maxY = Math.max(...allY);
+  const rangeX = maxX - minX || 0.001;
+  const rangeY = maxY - minY || 0.001;
+
+  // Add 15% vertical headroom so the arc doesn't touch the top edge
+  const scaleY = (H - 2*PAD) * 0.85;
 
   function toCanvas(x, y) {
-    return [PAD + ((x-minX)/rangeX)*(W-2*PAD), H-PAD-((y-minY)/rangeY)*(H-2*PAD)];
+    return [
+      PAD + ((x - minX) / rangeX) * (W - 2*PAD),
+      H - PAD - ((y - minY) / rangeY) * scaleY,
+    ];
   }
 
   footpathCtx.clearRect(0,0,W,H);
   footpathCtx.fillStyle = '#F0F4FF'; footpathCtx.fillRect(0,0,W,H);
 
+  // Draw ground line
+  const [gx0] = toCanvas(minX, 0), [gx1] = toCanvas(maxX, 0);
+  const [,gy] = toCanvas(minX, 0);
+  footpathCtx.beginPath();
+  footpathCtx.strokeStyle = '#D1D5DB'; footpathCtx.lineWidth = 1;
+  footpathCtx.setLineDash([4,4]);
+  footpathCtx.moveTo(gx0, gy); footpathCtx.lineTo(gx1, gy);
+  footpathCtx.stroke(); footpathCtx.setLineDash([]);
+
   if (optimalPath && optimalPath.x.length >= 2) {
+    // Tolerance band: ±10% of rangeY around the ideal arc
+    const yTol = rangeY * 0.10;
     footpathCtx.beginPath();
     for (let i=0; i<optimalPath.x.length; i++) {
-      const [cx,cy] = toCanvas(optimalPath.x[i]-0.02, optimalPath.y[i]);
+      const [cx,cy] = toCanvas(optimalPath.x[i], optimalPath.y[i] - yTol);
       i===0 ? footpathCtx.moveTo(cx,cy) : footpathCtx.lineTo(cx,cy);
     }
     for (let i=optimalPath.x.length-1; i>=0; i--) {
-      const [cx,cy] = toCanvas(optimalPath.x[i]+0.02, optimalPath.y[i]);
+      const [cx,cy] = toCanvas(optimalPath.x[i], optimalPath.y[i] + yTol);
       footpathCtx.lineTo(cx,cy);
     }
     footpathCtx.closePath();
-    footpathCtx.fillStyle = 'rgba(167,139,250,0.18)'; footpathCtx.fill();
+    footpathCtx.fillStyle = 'rgba(167,139,250,0.22)'; footpathCtx.fill();
 
+    // Ideal arc (dashed)
     footpathCtx.beginPath();
     footpathCtx.setLineDash([6,5]); footpathCtx.strokeStyle = '#9CA3AF'; footpathCtx.lineWidth = 2;
     for (let i=0; i<optimalPath.x.length; i++) {
@@ -360,6 +382,7 @@ function updateFootPath(footPath, optimalPath) {
     footpathCtx.stroke(); footpathCtx.setLineDash([]);
   }
 
+  // Actual foot path (blue)
   footpathCtx.beginPath();
   footpathCtx.strokeStyle = CLR.info; footpathCtx.lineWidth = 2.5; footpathCtx.lineJoin = 'round';
   for (let i=0; i<footPath.x.length; i++) {
@@ -368,6 +391,7 @@ function updateFootPath(footPath, optimalPath) {
   }
   footpathCtx.stroke();
 
+  // Animated dot at current foot position
   const last = footPath.x.length - 1;
   [animDotX, animDotY] = toCanvas(footPath.x[last], footPath.y[last]);
 }
